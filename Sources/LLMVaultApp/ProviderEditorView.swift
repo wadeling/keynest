@@ -8,6 +8,9 @@ struct ProviderEditorView: View {
     @State private var apiKey = ""
     @State private var aliyunAccessKeyID = ""
     @State private var aliyunAccessKeySecret = ""
+    @State private var isShowingStoredAPIKey = false
+    @State private var isShowingStoredAliyunAccessKeyID = false
+    @State private var isShowingStoredAliyunAccessKeySecret = false
 
     init(provider: ProviderAccount) {
         _provider = State(initialValue: provider)
@@ -37,14 +40,29 @@ struct ProviderEditorView: View {
                 TextField("Monthly Budget", value: $provider.monthlyBudget, format: .currency(code: "USD"))
 
                 SecureField("API Key", text: $apiKey)
-                    .help("Leave empty to keep the existing Keychain value.")
+                    .help("Leave the placeholder to keep the existing Keychain value.")
+                    .onChange(of: apiKey) { _, newValue in
+                        if isShowingStoredAPIKey && newValue != StoredSecretPlaceholder.mask {
+                            isShowingStoredAPIKey = false
+                        }
+                    }
 
                 if provider.kind == .aliyun {
                     Section("Aliyun Billing") {
                         SecureField("AccessKey ID", text: $aliyunAccessKeyID)
-                            .help("Used only for Alibaba Cloud BSS billing queries. Leave empty to keep the existing Keychain value.")
+                            .help("Leave the placeholder to keep the existing Keychain value.")
+                            .onChange(of: aliyunAccessKeyID) { _, newValue in
+                                if isShowingStoredAliyunAccessKeyID && newValue != StoredSecretPlaceholder.mask {
+                                    isShowingStoredAliyunAccessKeyID = false
+                                }
+                            }
                         SecureField("AccessKey Secret", text: $aliyunAccessKeySecret)
-                            .help("Used only for Alibaba Cloud BSS billing queries. Leave empty to keep the existing Keychain value.")
+                            .help("Leave the placeholder to keep the existing Keychain value.")
+                            .onChange(of: aliyunAccessKeySecret) { _, newValue in
+                                if isShowingStoredAliyunAccessKeySecret && newValue != StoredSecretPlaceholder.mask {
+                                    isShowingStoredAliyunAccessKeySecret = false
+                                }
+                            }
 
                         if store.hasAliyunAccessKeys(for: provider) {
                             Label("Aliyun AK/SK saved in Keychain", systemImage: "checkmark.seal.fill")
@@ -72,9 +90,9 @@ struct ProviderEditorView: View {
                 Button("Save") {
                     store.upsertProvider(
                         provider,
-                        apiKey: apiKey,
-                        aliyunAccessKeyID: aliyunAccessKeyID,
-                        aliyunAccessKeySecret: aliyunAccessKeySecret
+                        apiKey: StoredSecretPlaceholder.valueForSave(apiKey),
+                        aliyunAccessKeyID: StoredSecretPlaceholder.valueForSave(aliyunAccessKeyID),
+                        aliyunAccessKeySecret: StoredSecretPlaceholder.valueForSave(aliyunAccessKeySecret)
                     )
                     dismiss()
                 }
@@ -84,5 +102,22 @@ struct ProviderEditorView: View {
         }
         .padding(24)
         .frame(width: 520)
+        .onAppear {
+            loadStoredSecretPlaceholders()
+        }
+    }
+
+    private func loadStoredSecretPlaceholders() {
+        if store.hasAPIKey(for: provider) {
+            apiKey = StoredSecretPlaceholder.mask
+            isShowingStoredAPIKey = true
+        }
+
+        if store.hasAliyunAccessKeys(for: provider) {
+            aliyunAccessKeyID = StoredSecretPlaceholder.mask
+            aliyunAccessKeySecret = StoredSecretPlaceholder.mask
+            isShowingStoredAliyunAccessKeyID = true
+            isShowingStoredAliyunAccessKeySecret = true
+        }
     }
 }

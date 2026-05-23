@@ -35,7 +35,7 @@ final class MenuBarController: NSObject {
 
     func configure(store: VaultStore, openMainWindow: @escaping () -> Void) {
         self.store = store
-        self.openMainWindow = openMainWindow
+        self.openMainWindow = { MainWindowPresenter.show() }
 
         guard statusItem == nil else { return }
 

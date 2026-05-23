@@ -10,6 +10,7 @@ struct LLMVaultApp: App {
             ContentView()
                 .environmentObject(store)
                 .frame(minWidth: 1080, minHeight: 680)
+                .attachMainWindowPresenter()
                 .background(AppBootstrapView(store: store, appDelegate: appDelegate))
         }
         .windowStyle(.titleBar)
@@ -24,7 +25,6 @@ struct LLMVaultApp: App {
 private struct AppBootstrapView: NSViewRepresentable {
     let store: VaultStore
     let appDelegate: AppDelegate
-    @Environment(\.openWindow) private var openWindow
 
     func makeNSView(context: Context) -> NSView {
         let view = NSView(frame: .zero)
@@ -37,7 +37,6 @@ private struct AppBootstrapView: NSViewRepresentable {
     func updateNSView(_ nsView: NSView, context: Context) {
         context.coordinator.store = store
         context.coordinator.appDelegate = appDelegate
-        context.coordinator.openWindow = openWindow
     }
 
     func makeCoordinator() -> Coordinator {
@@ -47,7 +46,6 @@ private struct AppBootstrapView: NSViewRepresentable {
     final class Coordinator {
         var store: VaultStore?
         var appDelegate: AppDelegate?
-        var openWindow: OpenWindowAction?
         private var didBootstrap = false
 
         @MainActor
@@ -60,12 +58,8 @@ private struct AppBootstrapView: NSViewRepresentable {
             }
 
             didBootstrap = true
-            appDelegate.configure(store: store) { [weak self] in
-                Task { @MainActor in
-                    guard let self else { return }
-                    NSApp.activate(ignoringOtherApps: true)
-                    self.openWindow?(id: "main")
-                }
+            appDelegate.configure(store: store) {
+                MainWindowPresenter.show()
             }
         }
     }
