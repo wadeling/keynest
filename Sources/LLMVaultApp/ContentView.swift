@@ -1,9 +1,22 @@
 import SwiftUI
 
+private enum ProviderEditorTarget: Identifiable {
+    case edit(UUID)
+    case add
+
+    var id: String {
+        switch self {
+        case .edit(let id):
+            id.uuidString
+        case .add:
+            "add"
+        }
+    }
+}
+
 struct ContentView: View {
     @EnvironmentObject private var store: VaultStore
-    @State private var showingEditor = false
-    @State private var editingProvider: ProviderAccount?
+    @State private var editorTarget: ProviderEditorTarget?
 
     var body: some View {
         NavigationSplitView {
@@ -15,16 +28,15 @@ struct ContentView: View {
             case .provider(let id):
                 if let provider = store.providers.first(where: { $0.id == id }) {
                     ProviderDetailView(provider: provider, editAction: {
-                        editingProvider = provider
-                        showingEditor = true
+                        editorTarget = .edit(provider.id)
                     })
                 } else {
                     DashboardView()
                 }
             }
         }
-        .sheet(isPresented: $showingEditor) {
-            ProviderEditorView(provider: editingProvider ?? ProviderAccount.blank())
+        .sheet(item: $editorTarget) { target in
+            ProviderEditorView(provider: providerForEditor(target))
                 .environmentObject(store)
         }
         .alert("KeyNest", isPresented: Binding(
@@ -52,8 +64,7 @@ struct ContentView: View {
                         .tag(SidebarSelection.provider(provider.id))
                         .contextMenu {
                             Button("Edit") {
-                                editingProvider = provider
-                                showingEditor = true
+                                editorTarget = .edit(provider.id)
                             }
                             Button("Delete", role: .destructive) {
                                 store.deleteProvider(provider)
@@ -64,8 +75,7 @@ struct ContentView: View {
         }
         .safeAreaInset(edge: .bottom) {
             Button {
-                editingProvider = ProviderAccount.blank()
-                showingEditor = true
+                editorTarget = .add
             } label: {
                 Label("Add Provider", systemImage: "plus")
                     .frame(maxWidth: .infinity)
@@ -74,6 +84,15 @@ struct ContentView: View {
             .padding()
         }
         .navigationSplitViewColumnWidth(min: 240, ideal: 280)
+    }
+
+    private func providerForEditor(_ target: ProviderEditorTarget) -> ProviderAccount {
+        switch target {
+        case .edit(let id):
+            store.providers.first(where: { $0.id == id }) ?? ProviderAccount.blank()
+        case .add:
+            ProviderAccount.blank()
+        }
     }
 }
 

@@ -14,6 +14,12 @@ struct ProviderEditorView: View {
 
     init(provider: ProviderAccount) {
         _provider = State(initialValue: provider)
+        _apiKey = State(initialValue: provider.hasStoredAPIKey ? StoredSecretPlaceholder.mask : "")
+        _isShowingStoredAPIKey = State(initialValue: provider.hasStoredAPIKey)
+        _aliyunAccessKeyID = State(initialValue: provider.hasStoredAliyunAccessKeys ? StoredSecretPlaceholder.mask : "")
+        _aliyunAccessKeySecret = State(initialValue: provider.hasStoredAliyunAccessKeys ? StoredSecretPlaceholder.mask : "")
+        _isShowingStoredAliyunAccessKeyID = State(initialValue: provider.hasStoredAliyunAccessKeys)
+        _isShowingStoredAliyunAccessKeySecret = State(initialValue: provider.hasStoredAliyunAccessKeys)
     }
 
     var body: some View {
@@ -40,6 +46,7 @@ struct ProviderEditorView: View {
                 TextField("Monthly Budget", value: $provider.monthlyBudget, format: .currency(code: "USD"))
 
                 SecureField("API Key", text: $apiKey)
+                    .id("\(provider.id)-api-key-\(isShowingStoredAPIKey)")
                     .help("Leave the placeholder to keep the existing Keychain value.")
                     .onChange(of: apiKey) { _, newValue in
                         if isShowingStoredAPIKey && newValue != StoredSecretPlaceholder.mask {
@@ -102,22 +109,42 @@ struct ProviderEditorView: View {
         }
         .padding(24)
         .frame(width: 520)
-        .onAppear {
+        .task(id: provider.id) {
             loadStoredSecretPlaceholders()
         }
     }
 
+    private var storedProvider: ProviderAccount {
+        store.providers.first(where: { $0.id == provider.id }) ?? provider
+    }
+
     private func loadStoredSecretPlaceholders() {
-        if store.hasAPIKey(for: provider) {
-            apiKey = StoredSecretPlaceholder.mask
+        let current = storedProvider
+
+        if store.hasAPIKey(for: current) {
             isShowingStoredAPIKey = true
+            if apiKey.isEmpty || StoredSecretPlaceholder.isPlaceholder(apiKey) {
+                apiKey = StoredSecretPlaceholder.mask
+            }
+        } else if isShowingStoredAPIKey {
+            apiKey = ""
+            isShowingStoredAPIKey = false
         }
 
-        if store.hasAliyunAccessKeys(for: provider) {
-            aliyunAccessKeyID = StoredSecretPlaceholder.mask
-            aliyunAccessKeySecret = StoredSecretPlaceholder.mask
+        if store.hasAliyunAccessKeys(for: current) {
             isShowingStoredAliyunAccessKeyID = true
             isShowingStoredAliyunAccessKeySecret = true
+            if aliyunAccessKeyID.isEmpty || StoredSecretPlaceholder.isPlaceholder(aliyunAccessKeyID) {
+                aliyunAccessKeyID = StoredSecretPlaceholder.mask
+            }
+            if aliyunAccessKeySecret.isEmpty || StoredSecretPlaceholder.isPlaceholder(aliyunAccessKeySecret) {
+                aliyunAccessKeySecret = StoredSecretPlaceholder.mask
+            }
+        } else if isShowingStoredAliyunAccessKeyID || isShowingStoredAliyunAccessKeySecret {
+            aliyunAccessKeyID = ""
+            aliyunAccessKeySecret = ""
+            isShowingStoredAliyunAccessKeyID = false
+            isShowingStoredAliyunAccessKeySecret = false
         }
     }
 }
