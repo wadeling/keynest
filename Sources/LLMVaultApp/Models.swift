@@ -37,7 +37,7 @@ enum ProviderKind: String, CaseIterable, Codable, Identifiable {
         case .openRouter: "https://openrouter.ai/api/v1"
         case .deepSeek: "https://api.deepseek.com"
         case .aliyun: "https://dashscope.aliyuncs.com/compatible-mode/v1"
-        case .minimax: "https://api.minimax.io/v1"
+        case .minimax: "https://api.minimaxi.com/v1"
         case .siliconFlow: "https://api.siliconflow.cn/v1"
         case .zhipu: "https://open.bigmodel.cn/api/paas/v4"
         case .custom: ""
@@ -132,30 +132,6 @@ struct ProviderAccount: Identifiable, Codable, Hashable, Sendable {
     }
 }
 
-struct UsageSnapshot: Identifiable, Codable, Hashable, Sendable {
-    var id = UUID()
-    var providerID: UUID
-    var periodStart: Date
-    var periodEnd: Date
-    var totalCost: Decimal
-    var requestCount: Int
-    var inputTokens: Int
-    var outputTokens: Int
-    var currencyCode: String
-    var source: String
-    var fetchedAt: Date
-}
-
-struct ProviderStatus: Hashable {
-    var hasAPIKey: Bool
-    var latestUsage: UsageSnapshot?
-
-    var spendRatio: Decimal {
-        guard let latestUsage else { return 0 }
-        return latestUsage.totalCost
-    }
-}
-
 struct ProviderSyncState: Identifiable, Codable, Hashable, Sendable {
     var providerID: UUID
     var lastSyncedAt: Date?
@@ -177,6 +153,18 @@ struct ProviderSyncState: Identifiable, Codable, Hashable, Sendable {
     }
 }
 
+struct BalanceSnapshot: Identifiable, Codable, Hashable, Sendable {
+    var id = UUID()
+    var providerID: UUID
+    var balance: Decimal
+    var currencyCode: String
+    var recordedAt: Date
+
+    var balanceValue: Double {
+        NSDecimalNumber(decimal: balance).doubleValue
+    }
+}
+
 extension Decimal {
     var currencyString: String {
         currencyString(code: "USD")
@@ -188,11 +176,5 @@ extension Decimal {
         formatter.currencyCode = code
         formatter.maximumFractionDigits = 2
         return formatter.string(from: NSDecimalNumber(decimal: self)) ?? "$0.00"
-    }
-}
-
-extension UsageSnapshot {
-    var costString: String {
-        totalCost.currencyString(code: currencyCode)
     }
 }

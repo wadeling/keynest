@@ -43,8 +43,6 @@ struct ProviderEditorView: View {
 
                 TextField("Base URL", text: $provider.baseURL)
 
-                TextField("Monthly Budget", value: $provider.monthlyBudget, format: .currency(code: "USD"))
-
                 SecureField("API Key", text: $apiKey)
                     .id("\(provider.id)-api-key-\(isShowingStoredAPIKey)")
                     .help("Leave the placeholder to keep the existing Keychain value.")

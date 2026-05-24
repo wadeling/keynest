@@ -34,7 +34,6 @@ struct DashboardView: View {
 
                 Grid(alignment: .leading, horizontalSpacing: 18, verticalSpacing: 18) {
                     GridRow {
-                        DashboardMetric(title: "Month Spend", value: store.totalMonthSpend.currencyString, systemImage: "dollarsign.circle")
                         DashboardMetric(
                             title: "Known Balances",
                             value: "\(store.providersWithKnownBalance)/\(store.providers.count)",

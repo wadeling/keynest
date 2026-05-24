@@ -29,7 +29,6 @@ struct UsageSyncUpdate: Sendable {
     var lastKnownBalance: Decimal?
     var currencyCode: String?
     var supportsAutomaticSync: Bool
-    var usageSnapshot: UsageSnapshot?
 }
 
 struct UsageSyncService {
@@ -95,13 +94,88 @@ struct UsageSyncService {
             statusMessage: payload.isAvailable ? "Balance synced" : "Balance synced, but account is not available",
             lastKnownBalance: amount,
             currencyCode: balance.currency,
-            supportsAutomaticSync: true,
-            usageSnapshot: nil
+            supportsAutomaticSync: true
         )
     }
 
     private func syncMiniMax(provider: ProviderAccount, apiKey: String) async throws -> UsageSyncUpdate {
-        try await syncOpenAICompatibleModels(provider: provider, apiKey: apiKey)
+        var lastError: Error?
+
+        for baseURL in miniMaxCandidateBaseURLs(for: provider) {
+            do {
+                return try await verifyMiniMaxAPIKey(baseURL: baseURL, apiKey: apiKey)
+            } catch UsageSyncError.httpStatus(401, let body) {
+                lastError = UsageSyncError.httpStatus(401, body)
+            } catch {
+                throw error
+            }
+        }
+
+        if let lastError {
+            throw lastError
+        }
+
+        throw UsageSyncError.httpStatus(401, "Invalid API key")
+    }
+
+    private func miniMaxCandidateBaseURLs(for provider: ProviderAccount) -> [String] {
+        let trimmed = provider.baseURL.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        var bases: [String]
+
+        if trimmed.isEmpty {
+            bases = [
+                ProviderKind.minimax.defaultBaseURL,
+                "https://api.minimax.io/v1"
+            ]
+        } else {
+            bases = [trimmed]
+            if trimmed.contains("api.minimax.io") {
+                bases.append(trimmed.replacingOccurrences(of: "api.minimax.io", with: "api.minimaxi.com"))
+            } else if trimmed.contains("api.minimaxi.com") {
+                bases.append(trimmed.replacingOccurrences(of: "api.minimaxi.com", with: "api.minimax.io"))
+            }
+        }
+
+        return Array(Set(bases))
+    }
+
+    private func verifyMiniMaxAPIKey(baseURL: String, apiKey: String) async throws -> UsageSyncUpdate {
+        let base = baseURL.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        guard let url = URL(string: "\(base)/chat/completions") else {
+            throw UsageSyncError.invalidURL
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONEncoder().encode(MiniMaxVerificationRequest())
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse else {
+            throw UsageSyncError.httpStatus(-1, "Invalid response")
+        }
+
+        guard (200..<300).contains(http.statusCode) else {
+            let body = String(data: data, encoding: .utf8) ?? "No response body"
+            throw UsageSyncError.httpStatus(http.statusCode, body)
+        }
+
+        if let payload = try? JSONDecoder().decode(MiniMaxChatCompletionResponse.self, from: data),
+           let baseResp = payload.baseResp,
+           baseResp.statusCode != 0 {
+            throw UsageSyncError.httpStatus(
+                http.statusCode,
+                baseResp.statusMsg ?? "MiniMax API error \(baseResp.statusCode)"
+            )
+        }
+
+        return UsageSyncUpdate(
+            statusMessage: "API key verified via chat/completions. Check balance in the MiniMax console.",
+            lastKnownBalance: nil,
+            currencyCode: nil,
+            supportsAutomaticSync: true
+        )
     }
 
     private func syncOpenAICompatibleModels(provider: ProviderAccount, apiKey: String, verifiedMessage: String = "Billing sync unavailable") async throws -> UsageSyncUpdate {
@@ -132,8 +206,7 @@ struct UsageSyncService {
             statusMessage: "API key verified; \(count) models available. \(verifiedMessage)",
             lastKnownBalance: nil,
             currencyCode: nil,
-            supportsAutomaticSync: true,
-            usageSnapshot: nil
+            supportsAutomaticSync: true
         )
     }
 
@@ -181,8 +254,7 @@ struct UsageSyncService {
             statusMessage: "Charge balance synced\(statusSuffix)",
             lastKnownBalance: balance,
             currencyCode: "CNY",
-            supportsAutomaticSync: true,
-            usageSnapshot: nil
+            supportsAutomaticSync: true
         )
     }
 
@@ -215,32 +287,23 @@ struct UsageSyncService {
               !accessKeySecret.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         else {
             return UsageSyncUpdate(
-                statusMessage: "API key verified; \(count) models available. Add Aliyun AK/SK to sync account bill",
+                statusMessage: "API key verified; \(count) models available. Add Aliyun AK/SK to sync account balance",
                 lastKnownBalance: nil,
                 currencyCode: nil,
-                supportsAutomaticSync: true,
-                usageSnapshot: nil
+                supportsAutomaticSync: true
             )
         }
 
-        async let bill = queryAliyunAccountBill(
-            providerID: provider.id,
+        let balanceResult = try await queryAliyunAccountBalance(
             accessKeyID: accessKeyID,
             accessKeySecret: accessKeySecret
         )
-        async let balance = queryAliyunAccountBalance(
-            accessKeyID: accessKeyID,
-            accessKeySecret: accessKeySecret
-        )
-
-        let (billSnapshot, balanceResult) = try await (bill, balance)
 
         return UsageSyncUpdate(
-            statusMessage: "API key verified; \(count) models available. Aliyun account bill and balance synced",
+            statusMessage: "API key verified; \(count) models available. Aliyun account balance synced",
             lastKnownBalance: balanceResult.amount,
             currencyCode: balanceResult.currencyCode,
-            supportsAutomaticSync: true,
-            usageSnapshot: billSnapshot
+            supportsAutomaticSync: true
         )
     }
 
@@ -273,52 +336,6 @@ struct UsageSyncService {
         return AliyunAccountBalanceResult(
             amount: amount,
             currencyCode: balanceData.currency ?? "CNY"
-        )
-    }
-
-    private func queryAliyunAccountBill(providerID: UUID, accessKeyID: String, accessKeySecret: String) async throws -> UsageSnapshot {
-        let calendar = Calendar(identifier: .gregorian)
-        let now = Date()
-        let dateComponents = calendar.dateComponents([.year, .month], from: now)
-        let periodStart = calendar.date(from: dateComponents) ?? now
-        let billingCycle = String(format: "%04d-%02d", dateComponents.year ?? 1970, dateComponents.month ?? 1)
-
-        let data = try await fetchAliyunBSSResponse(
-            accessKeyID: accessKeyID,
-            accessKeySecret: accessKeySecret,
-            action: "QueryAccountBill",
-            version: "2017-12-14",
-            extra: [
-                "BillingCycle": billingCycle,
-                "PageNum": "1",
-                "PageSize": "300"
-            ]
-        )
-
-        let payload: AliyunAccountBillResponse
-        do {
-            payload = try JSONDecoder().decode(AliyunAccountBillResponse.self, from: data)
-        } catch {
-            let body = String(data: data, encoding: .utf8) ?? "No response body"
-            throw UsageSyncError.httpStatus(200, "Could not read Aliyun bill response: \(body)")
-        }
-
-        let items = payload.data.items.item
-        let paidAmount = items.compactMap(\.paymentAmount?.value).reduce(0, +)
-        let grossAmount = items.compactMap(\.pretaxGrossAmount?.value).reduce(0, +)
-        let amount = paidAmount > 0 ? paidAmount : grossAmount
-
-        return UsageSnapshot(
-            providerID: providerID,
-            periodStart: periodStart,
-            periodEnd: now,
-            totalCost: amount,
-            requestCount: 0,
-            inputTokens: 0,
-            outputTokens: 0,
-            currencyCode: "CNY",
-            source: "Aliyun BSS QueryAccountBill",
-            fetchedAt: now
         )
     }
 
@@ -482,6 +499,41 @@ private struct ProviderModel: Decodable {
     let id: String
 }
 
+private struct MiniMaxVerificationRequest: Encodable {
+    let model = "MiniMax-M2.7"
+    let messages = [MiniMaxVerificationMessage(role: "user", content: "ping")]
+    let maxCompletionTokens = 1
+
+    enum CodingKeys: String, CodingKey {
+        case model
+        case messages
+        case maxCompletionTokens = "max_completion_tokens"
+    }
+}
+
+private struct MiniMaxVerificationMessage: Encodable {
+    let role: String
+    let content: String
+}
+
+private struct MiniMaxChatCompletionResponse: Decodable {
+    let baseResp: MiniMaxBaseResponse?
+
+    enum CodingKeys: String, CodingKey {
+        case baseResp = "base_resp"
+    }
+}
+
+private struct MiniMaxBaseResponse: Decodable {
+    let statusCode: Int
+    let statusMsg: String?
+
+    enum CodingKeys: String, CodingKey {
+        case statusCode = "status_code"
+        case statusMsg = "status_msg"
+    }
+}
+
 private struct SiliconFlowUserInfoResponse: Decodable {
     let data: SiliconFlowUserInfoData
 }
@@ -559,69 +611,6 @@ private struct AliyunAccountBalanceData: Decodable {
         self.availableAmount = availableAmount
         self.availableCashAmount = availableCashAmount
         self.currency = currency
-    }
-}
-
-private struct AliyunAccountBillResponse: Decodable {
-    let data: AliyunAccountBillData
-
-    enum CodingKeys: String, CodingKey {
-        case data = "Data"
-    }
-
-    init(from decoder: Decoder) throws {
-        let container = try decoder.container(keyedBy: CodingKeys.self)
-        data = try container.decodeIfPresent(AliyunAccountBillData.self, forKey: .data) ?? AliyunAccountBillData(items: AliyunAccountBillItems(item: []))
-    }
-}
-
-private struct AliyunAccountBillData: Decodable {
-    let items: AliyunAccountBillItems
-
-    enum CodingKeys: String, CodingKey {
-        case items = "Items"
-    }
-
-    init(items: AliyunAccountBillItems) {
-        self.items = items
-    }
-
-    init(from decoder: Decoder) throws {
-        let container = try decoder.container(keyedBy: CodingKeys.self)
-        items = try container.decodeIfPresent(AliyunAccountBillItems.self, forKey: .items) ?? AliyunAccountBillItems(item: [])
-    }
-}
-
-private struct AliyunAccountBillItems: Decodable {
-    let item: [AliyunAccountBillItem]
-
-    enum CodingKeys: String, CodingKey {
-        case item = "Item"
-    }
-
-    init(item: [AliyunAccountBillItem]) {
-        self.item = item
-    }
-
-    init(from decoder: Decoder) throws {
-        let container = try decoder.container(keyedBy: CodingKeys.self)
-        if let item = try? container.decode([AliyunAccountBillItem].self, forKey: .item) {
-            self.item = item
-        } else if let item = try? container.decode(AliyunAccountBillItem.self, forKey: .item) {
-            self.item = [item]
-        } else {
-            self.item = []
-        }
-    }
-}
-
-private struct AliyunAccountBillItem: Decodable {
-    let paymentAmount: FlexibleDecimal?
-    let pretaxGrossAmount: FlexibleDecimal?
-
-    enum CodingKeys: String, CodingKey {
-        case paymentAmount = "PaymentAmount"
-        case pretaxGrossAmount = "PretaxGrossAmount"
     }
 }
 

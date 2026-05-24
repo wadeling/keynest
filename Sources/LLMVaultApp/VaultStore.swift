@@ -4,8 +4,8 @@ import SwiftUI
 @MainActor
 final class VaultStore: ObservableObject {
     @Published private(set) var providers: [ProviderAccount] = []
-    @Published private(set) var usage: [UsageSnapshot] = []
     @Published private(set) var syncStates: [ProviderSyncState] = []
+    @Published private(set) var balanceHistory: [BalanceSnapshot] = []
     @Published private(set) var syncingProviderIDs: Set<UUID> = []
     @Published var sidebarSelection: SidebarSelection = .dashboard
     @Published var alertMessage: String?
@@ -24,12 +24,12 @@ final class VaultStore: ObservableObject {
         appSupportURL.appending(path: "providers.json")
     }
 
-    private var usageURL: URL {
-        appSupportURL.appending(path: "usage.json")
-    }
-
     private var syncURL: URL {
         appSupportURL.appending(path: "sync.json")
+    }
+
+    private var balanceHistoryURL: URL {
+        appSupportURL.appending(path: "balance-history.json")
     }
 
     private var appSupportURL: URL {
@@ -46,32 +46,12 @@ final class VaultStore: ObservableObject {
         return providers.first { $0.id == id }
     }
 
-    var totalMonthSpend: Decimal {
-        currentMonthUsage.reduce(0) { $0 + $1.totalCost }
-    }
-
-    var totalMonthlyBudget: Decimal {
-        providers.reduce(0) { $0 + $1.monthlyBudget }
-    }
-
     var providersWithKnownBalance: Int {
         providers.filter { syncState(for: $0.id)?.lastKnownBalance != nil }.count
     }
 
-    var currentMonthUsage: [UsageSnapshot] {
-        let calendar = Calendar.current
-        return usage.filter { calendar.isDate($0.periodStart, equalTo: Date(), toGranularity: .month) }
-    }
-
     var autoSyncDescription: String {
         "Every 6 hours while the app is open; first run after 6 hours"
-    }
-
-    func latestUsage(for providerID: UUID) -> UsageSnapshot? {
-        usage
-            .filter { $0.providerID == providerID }
-            .sorted { $0.fetchedAt > $1.fetchedAt }
-            .first
     }
 
     func hasAPIKey(for provider: ProviderAccount) -> Bool {
@@ -91,6 +71,12 @@ final class VaultStore: ObservableObject {
         return state.balanceText
     }
 
+    func balanceHistory(for providerID: UUID) -> [BalanceSnapshot] {
+        balanceHistory
+            .filter { $0.providerID == providerID }
+            .sorted { $0.recordedAt < $1.recordedAt }
+    }
+
     func apiKeyPreview(for provider: ProviderAccount) -> String {
         guard hasAPIKey(for: provider) else { return "No key saved" }
         return "Saved in Keychain"
@@ -102,8 +88,8 @@ final class VaultStore: ObservableObject {
 
     func apiKey(for provider: ProviderAccount) -> String? {
         do {
-            keychain.beginUnlockSession()
-            return try keychain.read(account: provider.keychainAccount)
+            try ensureKeyAccess()
+            return try keychain.readProviderCredentials(for: provider)?.apiKey
         } catch {
             alertMessage = error.localizedDescription
             return nil
@@ -120,39 +106,31 @@ final class VaultStore: ObservableObject {
         updated.updatedAt = Date()
 
         let resolvedAPIKey = resolvedProviderAPIKey(apiKey: apiKey)
+        let resolvedAliyunAccessKeyID = resolvedProviderAPIKey(apiKey: aliyunAccessKeyID)
+        let resolvedAliyunAccessKeySecret = resolvedProviderAPIKey(apiKey: aliyunAccessKeySecret)
 
-        if let resolvedAPIKey {
-            do {
-                try keychain.save(resolvedAPIKey, account: updated.keychainAccount)
+        do {
+            try keychain.loadVaultIfNeeded(providers: providers)
+
+            if resolvedAPIKey != nil || resolvedAliyunAccessKeyID != nil || resolvedAliyunAccessKeySecret != nil {
+                try keychain.saveProviderCredentials(
+                    for: updated,
+                    apiKey: resolvedAPIKey,
+                    aliyunAccessKeyID: resolvedAliyunAccessKeyID,
+                    aliyunAccessKeySecret: resolvedAliyunAccessKeySecret
+                )
+            }
+
+            if resolvedAPIKey != nil {
                 updated.hasStoredAPIKey = true
-            } catch {
-                alertMessage = error.localizedDescription
-                return
             }
-        }
 
-        if let aliyunAccessKeyID, !aliyunAccessKeyID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            do {
-                try keychain.save(aliyunAccessKeyID, account: updated.aliyunAccessKeyIDAccount)
-            } catch {
-                alertMessage = error.localizedDescription
-                return
+            if updated.kind == .aliyun {
+                updated.hasStoredAliyunAccessKeys = keychain.hasAliyunAccessKeys(for: updated)
             }
-        }
-
-        if let aliyunAccessKeySecret, !aliyunAccessKeySecret.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            do {
-                try keychain.save(aliyunAccessKeySecret, account: updated.aliyunAccessKeySecretAccount)
-            } catch {
-                alertMessage = error.localizedDescription
-                return
-            }
-        }
-
-        if updated.kind == .aliyun {
-            updated.hasStoredAliyunAccessKeys = provider.hasStoredAliyunAccessKeys
-                || ((try? keychain.read(account: updated.aliyunAccessKeyIDAccount)) != nil
-                    && (try? keychain.read(account: updated.aliyunAccessKeySecretAccount)) != nil)
+        } catch {
+            alertMessage = error.localizedDescription
+            return
         }
 
         if let index = providers.firstIndex(where: { $0.id == updated.id }) {
@@ -167,16 +145,15 @@ final class VaultStore: ObservableObject {
 
     func deleteProvider(_ provider: ProviderAccount) {
         do {
-            try keychain.delete(account: provider.keychainAccount)
-            try keychain.delete(account: provider.aliyunAccessKeyIDAccount)
-            try keychain.delete(account: provider.aliyunAccessKeySecretAccount)
+            try keychain.loadVaultIfNeeded(providers: providers)
+            try keychain.deleteProviderCredentials(for: provider)
         } catch {
             alertMessage = error.localizedDescription
         }
 
         providers.removeAll { $0.id == provider.id }
-        usage.removeAll { $0.providerID == provider.id }
         syncStates.removeAll { $0.providerID == provider.id }
+        balanceHistory.removeAll { $0.providerID == provider.id }
         if case .provider(let id) = sidebarSelection, id == provider.id {
             sidebarSelection = providers.first.map { .provider($0.id) } ?? .dashboard
         }
@@ -190,7 +167,7 @@ final class VaultStore: ObservableObject {
         defer { syncingProviderIDs.remove(provider.id) }
 
         do {
-            keychain.beginUnlockSession()
+            try ensureKeyAccess()
 
             guard let credentials = try keychain.readProviderCredentials(for: provider) else {
                 throw UsageSyncError.missingAPIKey
@@ -211,8 +188,13 @@ final class VaultStore: ObservableObject {
                 currencyCode: update.currencyCode,
                 supportsAutomaticSync: update.supportsAutomaticSync
             ))
-            if let usageSnapshot = update.usageSnapshot {
-                upsertSyncedUsageSnapshot(usageSnapshot)
+            if let balance = update.lastKnownBalance, let currencyCode = update.currencyCode {
+                recordBalanceSnapshot(
+                    providerID: provider.id,
+                    balance: balance,
+                    currencyCode: currencyCode,
+                    recordedAt: Date()
+                )
             }
         } catch {
             upsertSyncState(ProviderSyncState(
@@ -228,7 +210,13 @@ final class VaultStore: ObservableObject {
     }
 
     func syncAllProviders() async {
-        keychain.beginUnlockSession()
+        do {
+            try ensureKeyAccess()
+        } catch {
+            alertMessage = error.localizedDescription
+            return
+        }
+
         for provider in providers where provider.isEnabled {
             await syncProvider(provider)
         }
@@ -241,47 +229,6 @@ final class VaultStore: ObservableObject {
         }
     }
 
-    func addUsageSnapshot(_ snapshot: UsageSnapshot) {
-        usage.append(snapshot)
-        save()
-    }
-
-    func upsertSyncedUsageSnapshot(_ snapshot: UsageSnapshot) {
-        if let index = usage.firstIndex(where: {
-            $0.providerID == snapshot.providerID
-                && $0.source == snapshot.source
-                && Calendar.current.isDate($0.periodStart, equalTo: snapshot.periodStart, toGranularity: .month)
-        }) {
-            usage[index] = snapshot
-        } else {
-            usage.append(snapshot)
-        }
-        save()
-    }
-
-    func addUsageSample(for provider: ProviderAccount) {
-        let calendar = Calendar.current
-        let start = calendar.date(from: calendar.dateComponents([.year, .month], from: Date())) ?? Date()
-        let snapshot = UsageSnapshot(
-            providerID: provider.id,
-            periodStart: start,
-            periodEnd: Date(),
-            totalCost: Decimal(Double.random(in: 1.2...18.5)),
-            requestCount: Int.random(in: 120...2800),
-            inputTokens: Int.random(in: 50_000...2_000_000),
-            outputTokens: Int.random(in: 20_000...850_000),
-            currencyCode: "USD",
-            source: "Local sample",
-            fetchedAt: Date()
-        )
-        addUsageSnapshot(snapshot)
-    }
-
-    func removeUsage(_ snapshot: UsageSnapshot) {
-        usage.removeAll { $0.id == snapshot.id }
-        save()
-    }
-
     private func load() {
         do {
             try fileManager.createDirectory(at: appSupportURL, withIntermediateDirectories: true)
@@ -291,48 +238,55 @@ final class VaultStore: ObservableObject {
                 providers = try JSONDecoder.vault.decode([ProviderAccount].self, from: data)
             }
 
-            if fileManager.fileExists(atPath: usageURL.path) {
-                let data = try Data(contentsOf: usageURL)
-                usage = try JSONDecoder.vault.decode([UsageSnapshot].self, from: data)
-            }
-
             if fileManager.fileExists(atPath: syncURL.path) {
                 let data = try Data(contentsOf: syncURL)
                 syncStates = try JSONDecoder.vault.decode([ProviderSyncState].self, from: data)
             }
 
+            if fileManager.fileExists(atPath: balanceHistoryURL.path) {
+                let data = try Data(contentsOf: balanceHistoryURL)
+                balanceHistory = try JSONDecoder.vault.decode([BalanceSnapshot].self, from: data)
+            }
+
             migrateStoredKeyFlagsIfNeeded()
+            migrateBalanceHistoryIfNeeded()
         } catch {
             alertMessage = error.localizedDescription
         }
     }
 
     private func migrateStoredKeyFlagsIfNeeded() {
-        let needsMigration = providers.contains {
-            !$0.hasStoredAPIKey || ($0.kind == .aliyun && !$0.hasStoredAliyunAccessKeys)
-        }
-        guard needsMigration else { return }
+        // Key presence is resolved lazily when credentials are loaded from the vault.
+    }
 
+    private func migrateBalanceHistoryIfNeeded() {
         var changed = false
-        for index in providers.indices {
-            if !providers[index].hasStoredAPIKey,
-               (try? keychain.read(account: providers[index].keychainAccount)) != nil {
-                providers[index].hasStoredAPIKey = true
-                changed = true
+
+        for state in syncStates {
+            guard let balance = state.lastKnownBalance,
+                  let currencyCode = state.currencyCode,
+                  let recordedAt = state.lastSyncedAt,
+                  !balanceHistory.contains(where: { $0.providerID == state.providerID })
+            else {
+                continue
             }
 
-            if providers[index].kind == .aliyun,
-               !providers[index].hasStoredAliyunAccessKeys,
-               (try? keychain.read(account: providers[index].aliyunAccessKeyIDAccount)) != nil,
-               (try? keychain.read(account: providers[index].aliyunAccessKeySecretAccount)) != nil {
-                providers[index].hasStoredAliyunAccessKeys = true
-                changed = true
-            }
+            balanceHistory.append(BalanceSnapshot(
+                providerID: state.providerID,
+                balance: balance,
+                currencyCode: currencyCode,
+                recordedAt: recordedAt
+            ))
+            changed = true
         }
 
         if changed {
             save()
         }
+    }
+
+    private func ensureKeyAccess() throws {
+        try keychain.loadVaultIfNeeded(providers: providers)
     }
 
     private func resolvedProviderAPIKey(apiKey: String?) -> String? {
@@ -351,11 +305,11 @@ final class VaultStore: ObservableObject {
             let providerData = try JSONEncoder.vault.encode(providers)
             try providerData.write(to: providersURL, options: [.atomic])
 
-            let usageData = try JSONEncoder.vault.encode(usage)
-            try usageData.write(to: usageURL, options: [.atomic])
-
             let syncData = try JSONEncoder.vault.encode(syncStates)
             try syncData.write(to: syncURL, options: [.atomic])
+
+            let balanceHistoryData = try JSONEncoder.vault.encode(balanceHistory)
+            try balanceHistoryData.write(to: balanceHistoryURL, options: [.atomic])
         } catch {
             alertMessage = error.localizedDescription
         }
@@ -367,6 +321,21 @@ final class VaultStore: ObservableObject {
         } else {
             syncStates.append(state)
         }
+        save()
+    }
+
+    private func recordBalanceSnapshot(
+        providerID: UUID,
+        balance: Decimal,
+        currencyCode: String,
+        recordedAt: Date
+    ) {
+        balanceHistory.append(BalanceSnapshot(
+            providerID: providerID,
+            balance: balance,
+            currencyCode: currencyCode,
+            recordedAt: recordedAt
+        ))
         save()
     }
 }

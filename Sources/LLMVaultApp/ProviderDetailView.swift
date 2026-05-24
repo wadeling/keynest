@@ -1,4 +1,5 @@
 import AppKit
+import Charts
 import SwiftUI
 
 struct ProviderDetailView: View {
@@ -10,9 +11,8 @@ struct ProviderDetailView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 24) {
                 header
-                SpendSummaryView(provider: provider)
                 SyncStatusView(provider: provider)
-                UsageHistoryView(provider: provider)
+                BalanceHistoryView(provider: provider)
             }
             .padding(28)
         }
@@ -56,7 +56,6 @@ struct ProviderDetailView: View {
 private struct SyncStatusView: View {
     @EnvironmentObject private var store: VaultStore
     let provider: ProviderAccount
-    @State private var showingUsageEntry = false
     @State private var showingAPIKey = false
 
     private var state: ProviderSyncState? {
@@ -121,13 +120,6 @@ private struct SyncStatusView: View {
                     }
                 }
                 .disabled(!provider.isEnabled || isSyncing)
-
-                Button {
-                    showingUsageEntry = true
-                } label: {
-                    Label("Add Usage", systemImage: "plus")
-                }
-                .disabled(!provider.isEnabled)
             }
 
             if let errorMessage = state?.errorMessage {
@@ -136,23 +128,23 @@ private struct SyncStatusView: View {
                     .foregroundStyle(.orange)
                     .textSelection(.enabled)
             } else if provider.kind == .deepSeek {
-                Text("DeepSeek sync currently reads account balance. Monthly spend still comes from manual usage entries until a cost API is available.")
+                Text("DeepSeek sync reads account balance from the official API.")
                     .font(.callout)
                     .foregroundStyle(.secondary)
             } else if provider.kind == .minimax {
-                Text("MiniMax sync verifies the API key against the models endpoint. The public docs do not expose a billing or usage endpoint yet, so monthly spend still comes from manual usage entries.")
+                Text("MiniMax sync verifies the API key via chat/completions. China keys use api.minimaxi.com; international keys use api.minimax.io.")
                     .font(.callout)
                     .foregroundStyle(.secondary)
             } else if provider.kind == .siliconFlow {
-                Text("SiliconFlow sync reads chargeBalance from the official user info endpoint. Monthly spend still comes from manual usage entries until a public billing history endpoint is added.")
+                Text("SiliconFlow sync reads charge balance from the official user info endpoint.")
                     .font(.callout)
                     .foregroundStyle(.secondary)
             } else if provider.kind == .zhipu {
-                Text("Zhipu sync only verifies the API key via the /models endpoint. Balance and usage must be checked in the Zhipu console.")
+                Text("Zhipu sync verifies the API key. Check balance in the Zhipu console.")
                     .font(.callout)
                     .foregroundStyle(.secondary)
             } else if provider.kind == .aliyun {
-                Text("Aliyun Bailian sync verifies the model API key, then uses Aliyun AK/SK to query account balance and the monthly account bill. If the account runs other Alibaba Cloud services, the bill can include more than Bailian model usage.")
+                Text("Aliyun sync verifies the Bailian API key and queries account balance via AK/SK.")
                     .font(.callout)
                     .foregroundStyle(.secondary)
             }
@@ -163,10 +155,6 @@ private struct SyncStatusView: View {
             RoundedRectangle(cornerRadius: 8)
                 .stroke(.quaternary, lineWidth: 1)
         )
-        .sheet(isPresented: $showingUsageEntry) {
-            UsageEntryView(provider: provider)
-                .environmentObject(store)
-        }
         .sheet(isPresented: $showingAPIKey) {
             APIKeyViewerView(provider: provider)
                 .environmentObject(store)
@@ -178,6 +166,220 @@ private struct SyncStatusView: View {
             return "exclamationmark.triangle"
         }
         return state?.lastSyncedAt == nil ? "clock" : "checkmark.circle"
+    }
+}
+
+private struct BalanceHistoryView: View {
+    @EnvironmentObject private var store: VaultStore
+    let provider: ProviderAccount
+
+    @State private var highlightedSnapshot: BalanceSnapshot?
+
+    private var snapshots: [BalanceSnapshot] {
+        store.balanceHistory(for: provider.id)
+    }
+
+    private var currencyCode: String {
+        snapshots.last?.currencyCode
+            ?? store.syncState(for: provider.id)?.currencyCode
+            ?? "USD"
+    }
+
+    private var yAxisDomain: ClosedRange<Double> {
+        let values = snapshots.map(\.balanceValue)
+        guard let minValue = values.min(), let maxValue = values.max() else {
+            return 0...1
+        }
+        let span = max(maxValue - minValue, maxValue * 0.1, 1)
+        let lower = max(0, minValue - span * 0.15)
+        let upper = maxValue + span * 0.2
+        return lower...upper
+    }
+
+    private var usesExplicitXAxis: Bool {
+        snapshots.count <= 6
+    }
+
+    private var showsTimeOnXAxis: Bool {
+        guard snapshots.count > 1,
+              let first = snapshots.first?.recordedAt,
+              let last = snapshots.last?.recordedAt
+        else {
+            return false
+        }
+        return last.timeIntervalSince(first) <= 86_400 * 3
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("余额历史曲线")
+                .font(.title3.weight(.semibold))
+
+            if snapshots.isEmpty {
+                ContentUnavailableView("暂无余额历史", systemImage: "chart.line.uptrend.xyaxis")
+                    .frame(maxWidth: .infinity, minHeight: 220)
+            } else {
+                Chart(snapshots) { snapshot in
+                    LineMark(
+                        x: .value("时间", snapshot.recordedAt),
+                        y: .value("余额", snapshot.balanceValue)
+                    )
+                    .interpolationMethod(.catmullRom)
+                    .foregroundStyle(Color.accentColor)
+
+                    PointMark(
+                        x: .value("时间", snapshot.recordedAt),
+                        y: .value("余额", snapshot.balanceValue)
+                    )
+                    .symbolSize(isHighlighted(snapshot) ? 90 : 44)
+                    .foregroundStyle(isHighlighted(snapshot) ? Color.accentColor : Color.accentColor.opacity(highlightedSnapshot == nil ? 1 : 0.35))
+
+                    if highlightedSnapshot?.id == snapshot.id {
+                        RuleMark(x: .value("时间", snapshot.recordedAt))
+                            .foregroundStyle(Color.accentColor.opacity(0.25))
+                            .lineStyle(StrokeStyle(lineWidth: 1, dash: [4, 3]))
+                    }
+                }
+                .chartYScale(domain: yAxisDomain)
+                .chartYAxis {
+                    AxisMarks(position: .leading)
+                }
+                .chartXAxis {
+                    if usesExplicitXAxis {
+                        AxisMarks(values: snapshots.map(\.recordedAt)) { value in
+                            AxisGridLine()
+                            AxisTick()
+                            if let date = value.as(Date.self) {
+                                AxisValueLabel(formatXAxisLabel(date))
+                            }
+                        }
+                    } else {
+                        AxisMarks(values: .automatic(desiredCount: 5)) { value in
+                            AxisGridLine()
+                            AxisTick()
+                            if let date = value.as(Date.self) {
+                                AxisValueLabel(formatXAxisLabel(date))
+                            }
+                        }
+                    }
+                }
+                .chartOverlay { proxy in
+                    GeometryReader { geometry in
+                        ZStack(alignment: .topLeading) {
+                            Rectangle()
+                                .fill(.clear)
+                                .contentShape(Rectangle())
+                                .onContinuousHover { phase in
+                                    switch phase {
+                                    case .active(let location):
+                                        highlightedSnapshot = nearestSnapshot(
+                                            at: location,
+                                            proxy: proxy,
+                                            geometry: geometry
+                                        )
+                                    case .ended:
+                                        highlightedSnapshot = nil
+                                    }
+                                }
+
+                            if let highlightedSnapshot,
+                               let plotFrame = plotFrame(in: geometry, proxy: proxy),
+                               let xPosition = proxy.position(forX: highlightedSnapshot.recordedAt),
+                               let yPosition = proxy.position(forY: highlightedSnapshot.balanceValue) {
+                                BalanceChartTooltip(snapshot: highlightedSnapshot)
+                                    .position(
+                                        x: plotFrame.origin.x + xPosition,
+                                        y: plotFrame.origin.y + yPosition - 32
+                                    )
+                            }
+                        }
+                    }
+                }
+                .frame(minHeight: 220)
+                .padding(16)
+                .background(.background, in: RoundedRectangle(cornerRadius: 8))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 8)
+                        .stroke(.quaternary, lineWidth: 1)
+                )
+
+                HStack {
+                    Text("共 \(snapshots.count) 次同步记录 · \(currencyCode)")
+                    Spacer()
+                    Text("悬停圆点查看数值")
+                        .foregroundStyle(.tertiary)
+                }
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    private func isHighlighted(_ snapshot: BalanceSnapshot) -> Bool {
+        highlightedSnapshot?.id == snapshot.id
+    }
+
+    private func formatXAxisLabel(_ date: Date) -> String {
+        if showsTimeOnXAxis {
+            date.formatted(date: .abbreviated, time: .shortened)
+        } else {
+            date.formatted(date: .abbreviated, time: .omitted)
+        }
+    }
+
+    private func plotFrame(in geometry: GeometryProxy, proxy: ChartProxy) -> CGRect? {
+        guard let anchor = proxy.plotFrame else { return nil }
+        return geometry[anchor]
+    }
+
+    private func nearestSnapshot(
+        at location: CGPoint,
+        proxy: ChartProxy,
+        geometry: GeometryProxy
+    ) -> BalanceSnapshot? {
+        guard let plotFrame = plotFrame(in: geometry, proxy: proxy),
+              plotFrame.contains(location)
+        else {
+            return nil
+        }
+
+        let x = location.x - plotFrame.origin.x
+        let maxDistance: CGFloat = 24
+
+        return snapshots.min { lhs, rhs in
+            let lhsDistance = proxy.position(forX: lhs.recordedAt).map { abs($0 - x) } ?? .infinity
+            let rhsDistance = proxy.position(forX: rhs.recordedAt).map { abs($0 - x) } ?? .infinity
+            return lhsDistance < rhsDistance
+        }.flatMap { candidate in
+            guard let pointX = proxy.position(forX: candidate.recordedAt),
+                  abs(pointX - x) <= maxDistance
+            else {
+                return nil
+            }
+            return candidate
+        }
+    }
+}
+
+private struct BalanceChartTooltip: View {
+    let snapshot: BalanceSnapshot
+
+    var body: some View {
+        VStack(spacing: 2) {
+            Text(snapshot.balance.currencyString(code: snapshot.currencyCode))
+                .font(.caption.weight(.semibold))
+                .monospacedDigit()
+            Text(snapshot.recordedAt.formatted(date: .abbreviated, time: .shortened))
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 6)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 6))
+        .overlay(
+            RoundedRectangle(cornerRadius: 6)
+                .stroke(.quaternary, lineWidth: 0.5)
+        )
     }
 }
 
@@ -259,179 +461,5 @@ private struct APIKeyViewerView: View {
         .onAppear {
             apiKey = store.apiKey(for: provider) ?? ""
         }
-    }
-}
-
-private struct SpendSummaryView: View {
-    @EnvironmentObject private var store: VaultStore
-    let provider: ProviderAccount
-
-    private var latest: UsageSnapshot? {
-        store.latestUsage(for: provider.id)
-    }
-
-    private var ratio: Double {
-        guard provider.monthlyBudget > 0, let latest else { return 0 }
-        let spent = NSDecimalNumber(decimal: latest.totalCost).doubleValue
-        let budget = NSDecimalNumber(decimal: provider.monthlyBudget).doubleValue
-        return min(spent / budget, 1)
-    }
-
-    var body: some View {
-        Grid(alignment: .leading, horizontalSpacing: 18, verticalSpacing: 18) {
-            GridRow {
-                MetricTile(title: "Month Spend", value: latest?.costString ?? "$0.00", systemImage: "dollarsign.circle")
-                MetricTile(title: "Monthly Budget", value: provider.monthlyBudget.currencyString, systemImage: "target")
-                MetricTile(title: "Requests", value: latest.map { $0.requestCount.formatted() } ?? "0", systemImage: "arrow.up.arrow.down")
-            }
-        }
-
-        ProgressView(value: ratio) {
-            Text("Budget usage")
-        } currentValueLabel: {
-            Text("\(Int(ratio * 100))%")
-        }
-    }
-}
-
-private struct MetricTile: View {
-    let title: String
-    let value: String
-    let systemImage: String
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack {
-                Image(systemName: systemImage)
-                    .foregroundStyle(Color.accentColor)
-                Text(title)
-                    .foregroundStyle(.secondary)
-            }
-            .font(.caption.weight(.medium))
-
-            Text(value)
-                .font(.title2.weight(.semibold))
-                .monospacedDigit()
-                .lineLimit(1)
-                .minimumScaleFactor(0.8)
-        }
-        .padding(16)
-        .frame(maxWidth: .infinity, minHeight: 110, alignment: .leading)
-        .background(.background, in: RoundedRectangle(cornerRadius: 8))
-        .overlay(
-            RoundedRectangle(cornerRadius: 8)
-                .stroke(.quaternary, lineWidth: 1)
-        )
-    }
-}
-
-private struct UsageHistoryView: View {
-    @EnvironmentObject private var store: VaultStore
-    let provider: ProviderAccount
-
-    private var snapshots: [UsageSnapshot] {
-        store.usage
-            .filter { $0.providerID == provider.id }
-            .sorted { $0.fetchedAt > $1.fetchedAt }
-    }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("Usage History")
-                .font(.title3.weight(.semibold))
-
-            if snapshots.isEmpty {
-                ContentUnavailableView("No usage data", systemImage: "chart.line.uptrend.xyaxis")
-                    .frame(maxWidth: .infinity, minHeight: 220)
-            } else {
-                Table(snapshots) {
-                    TableColumn("Fetched") { snapshot in
-                        Text(snapshot.fetchedAt.formatted(date: .abbreviated, time: .shortened))
-                    }
-                    TableColumn("Cost") { snapshot in
-                        Text(snapshot.costString)
-                            .monospacedDigit()
-                    }
-                    TableColumn("Requests") { snapshot in
-                        Text(snapshot.requestCount.formatted())
-                            .monospacedDigit()
-                    }
-                    TableColumn("Input") { snapshot in
-                        Text(snapshot.inputTokens.formatted())
-                            .monospacedDigit()
-                    }
-                    TableColumn("Output") { snapshot in
-                        Text(snapshot.outputTokens.formatted())
-                            .monospacedDigit()
-                    }
-                    TableColumn("Source") { snapshot in
-                        Text(snapshot.source)
-                    }
-                }
-                .frame(minHeight: 260)
-            }
-        }
-    }
-}
-
-private struct UsageEntryView: View {
-    @EnvironmentObject private var store: VaultStore
-    @Environment(\.dismiss) private var dismiss
-
-    let provider: ProviderAccount
-
-    @State private var totalCost: Decimal = 0
-    @State private var requestCount = 0
-    @State private var inputTokens = 0
-    @State private var outputTokens = 0
-    @State private var source = "Manual entry"
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 20) {
-            Text("Add Usage")
-                .font(.title2.weight(.semibold))
-
-            Form {
-                TextField("Cost", value: $totalCost, format: .currency(code: "USD"))
-                TextField("Requests", value: $requestCount, format: .number)
-                TextField("Input Tokens", value: $inputTokens, format: .number)
-                TextField("Output Tokens", value: $outputTokens, format: .number)
-                TextField("Source", text: $source)
-            }
-            .formStyle(.grouped)
-
-            HStack {
-                Spacer()
-                Button("Cancel") {
-                    dismiss()
-                }
-                Button("Save") {
-                    save()
-                }
-                .buttonStyle(.borderedProminent)
-            }
-        }
-        .padding(24)
-        .frame(width: 460)
-    }
-
-    private func save() {
-        let calendar = Calendar.current
-        let start = calendar.date(from: calendar.dateComponents([.year, .month], from: Date())) ?? Date()
-        let snapshot = UsageSnapshot(
-            providerID: provider.id,
-            periodStart: start,
-            periodEnd: Date(),
-            totalCost: totalCost,
-            requestCount: requestCount,
-            inputTokens: inputTokens,
-            outputTokens: outputTokens,
-            currencyCode: "USD",
-            source: source.isEmpty ? "Manual entry" : source,
-            fetchedAt: Date()
-        )
-
-        store.addUsageSnapshot(snapshot)
-        dismiss()
     }
 }
