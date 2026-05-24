@@ -10,6 +10,7 @@ enum ProviderKind: String, CaseIterable, Codable, Identifiable {
     case minimax
     case siliconFlow
     case zhipu
+    case liaobots
     case custom
 
     var id: String { rawValue }
@@ -25,6 +26,7 @@ enum ProviderKind: String, CaseIterable, Codable, Identifiable {
         case .minimax: "MiniMax"
         case .siliconFlow: "SiliconFlow"
         case .zhipu: "Zhipu AI"
+        case .liaobots: "LiaoBots"
         case .custom: "Custom"
         }
     }
@@ -40,6 +42,7 @@ enum ProviderKind: String, CaseIterable, Codable, Identifiable {
         case .minimax: "https://api.minimaxi.com/v1"
         case .siliconFlow: "https://api.siliconflow.cn/v1"
         case .zhipu: "https://open.bigmodel.cn/api/paas/v4"
+        case .liaobots: "https://ai.liaobots.work/api/v1"
         case .custom: ""
         }
     }

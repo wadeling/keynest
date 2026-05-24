@@ -5,6 +5,7 @@ struct ProviderEditorView: View {
     @Environment(\.dismiss) private var dismiss
 
     @State private var provider: ProviderAccount
+    @State private var baseURL: String
     @State private var apiKey = ""
     @State private var aliyunAccessKeyID = ""
     @State private var aliyunAccessKeySecret = ""
@@ -14,6 +15,7 @@ struct ProviderEditorView: View {
 
     init(provider: ProviderAccount) {
         _provider = State(initialValue: provider)
+        _baseURL = State(initialValue: provider.baseURL)
         _apiKey = State(initialValue: provider.hasStoredAPIKey ? StoredSecretPlaceholder.mask : "")
         _isShowingStoredAPIKey = State(initialValue: provider.hasStoredAPIKey)
         _aliyunAccessKeyID = State(initialValue: provider.hasStoredAliyunAccessKeys ? StoredSecretPlaceholder.mask : "")
@@ -36,38 +38,54 @@ struct ProviderEditorView: View {
                     }
                 }
                 .onChange(of: provider.kind) { _, newValue in
-                    if provider.baseURL.isEmpty || ProviderKind.allCases.map(\.defaultBaseURL).contains(provider.baseURL) {
-                        provider.baseURL = newValue.defaultBaseURL
+                    if shouldApplyDefaultBaseURL(baseURL, for: newValue) {
+                        baseURL = newValue.defaultBaseURL
                     }
                 }
 
-                TextField("Base URL", text: $provider.baseURL)
+                LabeledContent("Base URL") {
+                    TextField("Base URL", text: $baseURL, prompt: Text("https://api.example.com/v1"))
+                        .textFieldStyle(.roundedBorder)
+                        .labelsHidden()
+                }
 
-                SecureField("API Key", text: $apiKey)
-                    .id("\(provider.id)-api-key-\(isShowingStoredAPIKey)")
-                    .help("Leave the placeholder to keep the existing Keychain value.")
-                    .onChange(of: apiKey) { _, newValue in
-                        if isShowingStoredAPIKey && newValue != StoredSecretPlaceholder.mask {
-                            isShowingStoredAPIKey = false
+                LabeledContent("API Key") {
+                    SecureField("API Key", text: $apiKey, prompt: Text("Enter API key"))
+                        .textFieldStyle(.roundedBorder)
+                        .labelsHidden()
+                        .id("\(provider.id)-api-key-\(isShowingStoredAPIKey)")
+                        .help("Leave the placeholder to keep the existing Keychain value.")
+                        .onChange(of: apiKey) { _, newValue in
+                            if isShowingStoredAPIKey && newValue != StoredSecretPlaceholder.mask {
+                                isShowingStoredAPIKey = false
+                            }
                         }
-                    }
+                }
 
                 if provider.kind == .aliyun {
                     Section("Aliyun Billing") {
-                        SecureField("AccessKey ID", text: $aliyunAccessKeyID)
-                            .help("Leave the placeholder to keep the existing Keychain value.")
-                            .onChange(of: aliyunAccessKeyID) { _, newValue in
-                                if isShowingStoredAliyunAccessKeyID && newValue != StoredSecretPlaceholder.mask {
-                                    isShowingStoredAliyunAccessKeyID = false
+                        LabeledContent("AccessKey ID") {
+                            SecureField("AccessKey ID", text: $aliyunAccessKeyID, prompt: Text("Enter AccessKey ID"))
+                                .textFieldStyle(.roundedBorder)
+                                .labelsHidden()
+                                .help("Leave the placeholder to keep the existing Keychain value.")
+                                .onChange(of: aliyunAccessKeyID) { _, newValue in
+                                    if isShowingStoredAliyunAccessKeyID && newValue != StoredSecretPlaceholder.mask {
+                                        isShowingStoredAliyunAccessKeyID = false
+                                    }
                                 }
-                            }
-                        SecureField("AccessKey Secret", text: $aliyunAccessKeySecret)
-                            .help("Leave the placeholder to keep the existing Keychain value.")
-                            .onChange(of: aliyunAccessKeySecret) { _, newValue in
-                                if isShowingStoredAliyunAccessKeySecret && newValue != StoredSecretPlaceholder.mask {
-                                    isShowingStoredAliyunAccessKeySecret = false
+                        }
+                        LabeledContent("AccessKey Secret") {
+                            SecureField("AccessKey Secret", text: $aliyunAccessKeySecret, prompt: Text("Enter AccessKey Secret"))
+                                .textFieldStyle(.roundedBorder)
+                                .labelsHidden()
+                                .help("Leave the placeholder to keep the existing Keychain value.")
+                                .onChange(of: aliyunAccessKeySecret) { _, newValue in
+                                    if isShowingStoredAliyunAccessKeySecret && newValue != StoredSecretPlaceholder.mask {
+                                        isShowingStoredAliyunAccessKeySecret = false
+                                    }
                                 }
-                            }
+                        }
 
                         if store.hasAliyunAccessKeys(for: provider) {
                             Label("Aliyun AK/SK saved in Keychain", systemImage: "checkmark.seal.fill")
@@ -93,8 +111,10 @@ struct ProviderEditorView: View {
                     dismiss()
                 }
                 Button("Save") {
+                    var savedProvider = provider
+                    savedProvider.baseURL = baseURL.trimmingCharacters(in: .whitespacesAndNewlines)
                     store.upsertProvider(
-                        provider,
+                        savedProvider,
                         apiKey: StoredSecretPlaceholder.valueForSave(apiKey),
                         aliyunAccessKeyID: StoredSecretPlaceholder.valueForSave(aliyunAccessKeyID),
                         aliyunAccessKeySecret: StoredSecretPlaceholder.valueForSave(aliyunAccessKeySecret)
@@ -110,6 +130,17 @@ struct ProviderEditorView: View {
         .task(id: provider.id) {
             loadStoredSecretPlaceholders()
         }
+    }
+
+    private func shouldApplyDefaultBaseURL(_ current: String, for kind: ProviderKind) -> Bool {
+        let trimmed = current.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty {
+            return true
+        }
+
+        return ProviderKind.allCases
+            .filter { $0 != .custom }
+            .contains { $0.defaultBaseURL == trimmed }
     }
 
     private var storedProvider: ProviderAccount {

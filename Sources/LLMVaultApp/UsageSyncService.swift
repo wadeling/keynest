@@ -57,6 +57,8 @@ struct UsageSyncService {
                 apiKey: apiKey,
                 verifiedMessage: "Balance not available via public API"
             )
+        case .liaobots:
+            return try await syncLiaobots(provider: provider, apiKey: apiKey)
         case .openAI, .anthropic, .googleAI, .openRouter, .custom:
             throw UsageSyncError.unsupportedProvider(provider.kind.displayName)
         }
@@ -254,6 +256,47 @@ struct UsageSyncService {
             statusMessage: "Charge balance synced\(statusSuffix)",
             lastKnownBalance: balance,
             currencyCode: "CNY",
+            supportsAutomaticSync: true
+        )
+    }
+
+    private func syncLiaobots(provider: ProviderAccount, apiKey: String) async throws -> UsageSyncUpdate {
+        let base = provider.baseURL.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        guard let url = URL(string: "\(base)/credits") else {
+            throw UsageSyncError.invalidURL
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "GET"
+        request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse else {
+            throw UsageSyncError.httpStatus(-1, "Invalid response")
+        }
+
+        guard (200..<300).contains(http.statusCode) else {
+            let body = String(data: data, encoding: .utf8) ?? "No response body"
+            throw UsageSyncError.httpStatus(http.statusCode, body)
+        }
+
+        let payload = try JSONDecoder().decode(LiaobotsCreditsResponse.self, from: data)
+        guard let balance = payload.data.balance?.value else {
+            throw UsageSyncError.noBalance
+        }
+
+        let statusMessage: String
+        if let total = payload.data.amount?.value {
+            statusMessage = "Credits synced (\(balance) remaining of \(total))"
+        } else {
+            statusMessage = "Credits synced"
+        }
+
+        return UsageSyncUpdate(
+            statusMessage: statusMessage,
+            lastKnownBalance: balance,
+            currencyCode: "PTS",
             supportsAutomaticSync: true
         )
     }
@@ -532,6 +575,15 @@ private struct MiniMaxBaseResponse: Decodable {
         case statusCode = "status_code"
         case statusMsg = "status_msg"
     }
+}
+
+private struct LiaobotsCreditsResponse: Decodable {
+    let data: LiaobotsCreditsData
+}
+
+private struct LiaobotsCreditsData: Decodable {
+    let balance: FlexibleDecimal?
+    let amount: FlexibleDecimal?
 }
 
 private struct SiliconFlowUserInfoResponse: Decodable {

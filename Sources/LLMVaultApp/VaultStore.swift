@@ -204,7 +204,7 @@ final class VaultStore: ObservableObject {
                 errorMessage: error.localizedDescription,
                 lastKnownBalance: syncState(for: provider.id)?.lastKnownBalance,
                 currencyCode: syncState(for: provider.id)?.currencyCode,
-                supportsAutomaticSync: provider.kind == .deepSeek || provider.kind == .minimax || provider.kind == .aliyun || provider.kind == .siliconFlow || provider.kind == .zhipu
+                supportsAutomaticSync: provider.kind == .deepSeek || provider.kind == .minimax || provider.kind == .aliyun || provider.kind == .siliconFlow || provider.kind == .zhipu || provider.kind == .liaobots
             ))
         }
     }

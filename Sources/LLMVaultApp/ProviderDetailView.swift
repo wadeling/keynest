@@ -143,6 +143,10 @@ private struct SyncStatusView: View {
                 Text("Zhipu sync verifies the API key. Check balance in the Zhipu console.")
                     .font(.callout)
                     .foregroundStyle(.secondary)
+            } else if provider.kind == .liaobots {
+                Text("LiaoBots sync reads credit balance from GET /credits using your auth code.")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
             } else if provider.kind == .aliyun {
                 Text("Aliyun sync verifies the Bailian API key and queries account balance via AK/SK.")
                     .font(.callout)

@@ -13,6 +13,7 @@ extension ProviderKind {
         case .minimax: "m.square.fill"
         case .siliconFlow: "s.square.fill"
         case .zhipu: "z.square.fill"
+        case .liaobots: "l.square.fill"
         case .custom: "terminal.fill"
         }
     }
@@ -28,6 +29,7 @@ extension ProviderKind {
         case .minimax: .indigo
         case .siliconFlow: .purple
         case .zhipu: Color(red: 0.43, green: 0.16, blue: 0.96)
+        case .liaobots: .teal
         case .custom: .secondary
         }
     }
@@ -50,7 +52,7 @@ extension ProviderKind {
                 return nil
             }
             return NSImage(contentsOf: url)
-        case .openAI, .anthropic, .googleAI, .openRouter, .deepSeek, .aliyun, .minimax, .custom:
+        case .openAI, .anthropic, .googleAI, .openRouter, .deepSeek, .aliyun, .minimax, .liaobots, .custom:
             return nil
         }
     }
