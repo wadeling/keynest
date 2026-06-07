@@ -46,6 +46,12 @@ enum ProviderKind: String, CaseIterable, Codable, Identifiable {
         case .custom: ""
         }
     }
+
+    static var allCasesSortedByDisplayName: [ProviderKind] {
+        allCases.sorted {
+            $0.displayName.localizedCaseInsensitiveCompare($1.displayName) == .orderedAscending
+        }
+    }
 }
 
 enum SidebarSelection: Hashable, Sendable {
@@ -63,6 +69,7 @@ struct ProviderAccount: Identifiable, Codable, Hashable, Sendable {
     var isEnabled: Bool
     var hasStoredAPIKey: Bool = false
     var hasStoredAliyunAccessKeys: Bool = false
+    var hasStoredOpenRouterManagementKey: Bool = false
     var createdAt: Date
     var updatedAt: Date
 
@@ -88,6 +95,7 @@ struct ProviderAccount: Identifiable, Codable, Hashable, Sendable {
             isEnabled: true,
             hasStoredAPIKey: false,
             hasStoredAliyunAccessKeys: false,
+            hasStoredOpenRouterManagementKey: false,
             createdAt: Date(),
             updatedAt: Date()
         )
@@ -103,6 +111,7 @@ struct ProviderAccount: Identifiable, Codable, Hashable, Sendable {
         isEnabled: Bool,
         hasStoredAPIKey: Bool = false,
         hasStoredAliyunAccessKeys: Bool = false,
+        hasStoredOpenRouterManagementKey: Bool = false,
         createdAt: Date,
         updatedAt: Date
     ) {
@@ -115,6 +124,7 @@ struct ProviderAccount: Identifiable, Codable, Hashable, Sendable {
         self.isEnabled = isEnabled
         self.hasStoredAPIKey = hasStoredAPIKey
         self.hasStoredAliyunAccessKeys = hasStoredAliyunAccessKeys
+        self.hasStoredOpenRouterManagementKey = hasStoredOpenRouterManagementKey
         self.createdAt = createdAt
         self.updatedAt = updatedAt
     }
@@ -130,6 +140,7 @@ struct ProviderAccount: Identifiable, Codable, Hashable, Sendable {
         isEnabled = try container.decode(Bool.self, forKey: .isEnabled)
         hasStoredAPIKey = try container.decodeIfPresent(Bool.self, forKey: .hasStoredAPIKey) ?? false
         hasStoredAliyunAccessKeys = try container.decodeIfPresent(Bool.self, forKey: .hasStoredAliyunAccessKeys) ?? false
+        hasStoredOpenRouterManagementKey = try container.decodeIfPresent(Bool.self, forKey: .hasStoredOpenRouterManagementKey) ?? false
         createdAt = try container.decode(Date.self, forKey: .createdAt)
         updatedAt = try container.decode(Date.self, forKey: .updatedAt)
     }

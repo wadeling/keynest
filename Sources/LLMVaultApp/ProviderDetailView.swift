@@ -147,6 +147,10 @@ private struct SyncStatusView: View {
                 Text("LiaoBots sync reads credit balance from GET /credits using your auth code.")
                     .font(.callout)
                     .foregroundStyle(.secondary)
+            } else if provider.kind == .openRouter {
+                Text("OpenRouter sync uses the management key for account credits (GET /api/v1/credits) and the inference API key for per-key limits and monthly usage (GET /api/v1/key).")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
             } else if provider.kind == .aliyun {
                 Text("Aliyun sync verifies the Bailian API key and queries account balance via AK/SK.")
                     .font(.callout)

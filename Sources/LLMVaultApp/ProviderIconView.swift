@@ -52,7 +52,15 @@ extension ProviderKind {
                 return nil
             }
             return NSImage(contentsOf: url)
-        case .openAI, .anthropic, .googleAI, .openRouter, .deepSeek, .aliyun, .minimax, .liaobots, .custom:
+        case .openRouter:
+            guard let url = Bundle.module.url(
+                forResource: "openrouter",
+                withExtension: "png"
+            ) else {
+                return nil
+            }
+            return NSImage(contentsOf: url)
+        case .openAI, .anthropic, .googleAI, .deepSeek, .aliyun, .minimax, .liaobots, .custom:
             return nil
         }
     }

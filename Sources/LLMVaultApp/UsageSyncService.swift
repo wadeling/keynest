@@ -32,17 +32,39 @@ struct UsageSyncUpdate: Sendable {
 }
 
 struct UsageSyncService {
-    func sync(provider: ProviderAccount, apiKey: String, aliyunAccessKeyID: String? = nil, aliyunAccessKeySecret: String? = nil) async throws -> UsageSyncUpdate {
-        guard !apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-            throw UsageSyncError.missingAPIKey
-        }
-
+    func sync(
+        provider: ProviderAccount,
+        apiKey: String,
+        aliyunAccessKeyID: String? = nil,
+        aliyunAccessKeySecret: String? = nil,
+        openRouterManagementAPIKey: String? = nil
+    ) async throws -> UsageSyncUpdate {
         switch provider.kind {
+        case .openRouter:
+            let hasAPIKey = !apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            let hasManagementKey = !(openRouterManagementAPIKey?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
+            guard hasAPIKey || hasManagementKey else {
+                throw UsageSyncError.missingAPIKey
+            }
+            return try await syncOpenRouter(
+                provider: provider,
+                apiKey: apiKey,
+                managementAPIKey: openRouterManagementAPIKey
+            )
         case .deepSeek:
+            guard !apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                throw UsageSyncError.missingAPIKey
+            }
             return try await syncDeepSeek(provider: provider, apiKey: apiKey)
         case .minimax:
+            guard !apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                throw UsageSyncError.missingAPIKey
+            }
             return try await syncMiniMax(provider: provider, apiKey: apiKey)
         case .aliyun:
+            guard !apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                throw UsageSyncError.missingAPIKey
+            }
             return try await syncAliyun(
                 provider: provider,
                 apiKey: apiKey,
@@ -50,16 +72,28 @@ struct UsageSyncService {
                 accessKeySecret: aliyunAccessKeySecret
             )
         case .siliconFlow:
+            guard !apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                throw UsageSyncError.missingAPIKey
+            }
             return try await syncSiliconFlow(provider: provider, apiKey: apiKey)
         case .zhipu:
+            guard !apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                throw UsageSyncError.missingAPIKey
+            }
             return try await syncOpenAICompatibleModels(
                 provider: provider,
                 apiKey: apiKey,
                 verifiedMessage: "Balance not available via public API"
             )
         case .liaobots:
+            guard !apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                throw UsageSyncError.missingAPIKey
+            }
             return try await syncLiaobots(provider: provider, apiKey: apiKey)
-        case .openAI, .anthropic, .googleAI, .openRouter, .custom:
+        case .openAI, .anthropic, .googleAI, .custom:
+            guard !apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                throw UsageSyncError.missingAPIKey
+            }
             throw UsageSyncError.unsupportedProvider(provider.kind.displayName)
         }
     }
@@ -258,6 +292,96 @@ struct UsageSyncService {
             currencyCode: "CNY",
             supportsAutomaticSync: true
         )
+    }
+
+    private func syncOpenRouter(
+        provider: ProviderAccount,
+        apiKey: String,
+        managementAPIKey: String?
+    ) async throws -> UsageSyncUpdate {
+        let trimmedAPIKey = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedManagementKey = managementAPIKey?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+
+        var balance: Decimal?
+        var statusMessage = "OpenRouter synced"
+
+        if !trimmedManagementKey.isEmpty {
+            let credits = try await fetchOpenRouterAccountCredits(apiKey: trimmedManagementKey)
+            balance = credits.data.totalCredits.value - credits.data.totalUsage.value
+            statusMessage = "Account credits synced"
+        }
+
+        if !trimmedAPIKey.isEmpty {
+            let keyInfo = try await fetchOpenRouterKeyInfo(apiKey: trimmedAPIKey)
+            let keyData = keyInfo.data
+
+            if balance == nil, let remaining = keyData.limitRemaining?.value {
+                balance = remaining
+                statusMessage = "Key credit limit synced"
+            }
+
+            let monthlyUsage = keyData.usageMonthly.value
+            if monthlyUsage > 0 {
+                statusMessage += "; $\(monthlyUsage) used this month"
+            }
+
+            if let label = keyData.label, !label.isEmpty {
+                statusMessage += " (\(label))"
+            }
+        }
+
+        return UsageSyncUpdate(
+            statusMessage: statusMessage,
+            lastKnownBalance: balance,
+            currencyCode: balance == nil ? nil : "USD",
+            supportsAutomaticSync: true
+        )
+    }
+
+    private func fetchOpenRouterKeyInfo(apiKey: String) async throws -> OpenRouterKeyResponse {
+        guard let url = URL(string: "https://openrouter.ai/api/v1/key") else {
+            throw UsageSyncError.invalidURL
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "GET"
+        request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse else {
+            throw UsageSyncError.httpStatus(-1, "Invalid response")
+        }
+
+        guard (200..<300).contains(http.statusCode) else {
+            let body = String(data: data, encoding: .utf8) ?? "No response body"
+            throw UsageSyncError.httpStatus(http.statusCode, body)
+        }
+
+        return try JSONDecoder().decode(OpenRouterKeyResponse.self, from: data)
+    }
+
+    private func fetchOpenRouterAccountCredits(apiKey: String) async throws -> OpenRouterCreditsResponse {
+        guard let url = URL(string: "https://openrouter.ai/api/v1/credits") else {
+            throw UsageSyncError.invalidURL
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "GET"
+        request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse else {
+            throw UsageSyncError.httpStatus(-1, "Invalid response")
+        }
+
+        guard (200..<300).contains(http.statusCode) else {
+            let body = String(data: data, encoding: .utf8) ?? "No response body"
+            throw UsageSyncError.httpStatus(http.statusCode, body)
+        }
+
+        return try JSONDecoder().decode(OpenRouterCreditsResponse.self, from: data)
     }
 
     private func syncLiaobots(provider: ProviderAccount, apiKey: String) async throws -> UsageSyncUpdate {
@@ -574,6 +698,43 @@ private struct MiniMaxBaseResponse: Decodable {
     enum CodingKeys: String, CodingKey {
         case statusCode = "status_code"
         case statusMsg = "status_msg"
+    }
+}
+
+private struct OpenRouterKeyResponse: Decodable {
+    let data: OpenRouterKeyData
+}
+
+private struct OpenRouterKeyData: Decodable {
+    let label: String?
+    let limitRemaining: FlexibleDecimal?
+    let usageMonthly: FlexibleDecimal
+
+    enum CodingKeys: String, CodingKey {
+        case label
+        case limitRemaining = "limit_remaining"
+        case usageMonthly = "usage_monthly"
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        label = try container.decodeIfPresent(String.self, forKey: .label)
+        limitRemaining = try container.decodeIfPresent(FlexibleDecimal.self, forKey: .limitRemaining)
+        usageMonthly = try container.decodeIfPresent(FlexibleDecimal.self, forKey: .usageMonthly) ?? FlexibleDecimal(value: 0)
+    }
+}
+
+private struct OpenRouterCreditsResponse: Decodable {
+    let data: OpenRouterCreditsData
+}
+
+private struct OpenRouterCreditsData: Decodable {
+    let totalCredits: FlexibleDecimal
+    let totalUsage: FlexibleDecimal
+
+    enum CodingKeys: String, CodingKey {
+        case totalCredits = "total_credits"
+        case totalUsage = "total_usage"
     }
 }
 

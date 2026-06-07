@@ -86,6 +86,10 @@ final class VaultStore: ObservableObject {
         provider.hasStoredAliyunAccessKeys
     }
 
+    func hasOpenRouterManagementKey(for provider: ProviderAccount) -> Bool {
+        provider.hasStoredOpenRouterManagementKey
+    }
+
     func apiKey(for provider: ProviderAccount) -> String? {
         do {
             try ensureKeyAccess()
@@ -100,7 +104,8 @@ final class VaultStore: ObservableObject {
         _ provider: ProviderAccount,
         apiKey: String?,
         aliyunAccessKeyID: String? = nil,
-        aliyunAccessKeySecret: String? = nil
+        aliyunAccessKeySecret: String? = nil,
+        openRouterManagementAPIKey: String? = nil
     ) {
         var updated = provider
         updated.updatedAt = Date()
@@ -108,16 +113,21 @@ final class VaultStore: ObservableObject {
         let resolvedAPIKey = resolvedProviderAPIKey(apiKey: apiKey)
         let resolvedAliyunAccessKeyID = resolvedProviderAPIKey(apiKey: aliyunAccessKeyID)
         let resolvedAliyunAccessKeySecret = resolvedProviderAPIKey(apiKey: aliyunAccessKeySecret)
+        let resolvedOpenRouterManagementAPIKey = resolvedProviderAPIKey(apiKey: openRouterManagementAPIKey)
 
         do {
             try keychain.loadVaultIfNeeded(providers: providers)
 
-            if resolvedAPIKey != nil || resolvedAliyunAccessKeyID != nil || resolvedAliyunAccessKeySecret != nil {
+            if resolvedAPIKey != nil
+                || resolvedAliyunAccessKeyID != nil
+                || resolvedAliyunAccessKeySecret != nil
+                || resolvedOpenRouterManagementAPIKey != nil {
                 try keychain.saveProviderCredentials(
                     for: updated,
                     apiKey: resolvedAPIKey,
                     aliyunAccessKeyID: resolvedAliyunAccessKeyID,
-                    aliyunAccessKeySecret: resolvedAliyunAccessKeySecret
+                    aliyunAccessKeySecret: resolvedAliyunAccessKeySecret,
+                    openRouterManagementAPIKey: resolvedOpenRouterManagementAPIKey
                 )
             }
 
@@ -127,6 +137,10 @@ final class VaultStore: ObservableObject {
 
             if updated.kind == .aliyun {
                 updated.hasStoredAliyunAccessKeys = keychain.hasAliyunAccessKeys(for: updated)
+            }
+
+            if updated.kind == .openRouter {
+                updated.hasStoredOpenRouterManagementKey = keychain.hasOpenRouterManagementKey(for: updated)
             }
         } catch {
             alertMessage = error.localizedDescription
@@ -177,7 +191,8 @@ final class VaultStore: ObservableObject {
                 provider: provider,
                 apiKey: credentials.apiKey,
                 aliyunAccessKeyID: credentials.aliyunAccessKeyID,
-                aliyunAccessKeySecret: credentials.aliyunAccessKeySecret
+                aliyunAccessKeySecret: credentials.aliyunAccessKeySecret,
+                openRouterManagementAPIKey: credentials.openRouterManagementAPIKey
             )
             upsertSyncState(ProviderSyncState(
                 providerID: provider.id,
@@ -204,7 +219,7 @@ final class VaultStore: ObservableObject {
                 errorMessage: error.localizedDescription,
                 lastKnownBalance: syncState(for: provider.id)?.lastKnownBalance,
                 currencyCode: syncState(for: provider.id)?.currencyCode,
-                supportsAutomaticSync: provider.kind == .deepSeek || provider.kind == .minimax || provider.kind == .aliyun || provider.kind == .siliconFlow || provider.kind == .zhipu || provider.kind == .liaobots
+                supportsAutomaticSync: provider.kind == .deepSeek || provider.kind == .minimax || provider.kind == .aliyun || provider.kind == .siliconFlow || provider.kind == .zhipu || provider.kind == .liaobots || provider.kind == .openRouter
             ))
         }
     }

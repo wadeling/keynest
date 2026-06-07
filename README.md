@@ -16,6 +16,7 @@ KeyNest is a local-first macOS app for keeping LLM provider API keys in one plac
 - MiniMax automatic sync verifies the saved API key through `GET /v1/models`; MiniMax public docs do not expose billing/usage sync yet.
 - SiliconFlow automatic sync reads `chargeBalance` through the official `GET https://api.siliconflow.cn/v1/user/info` endpoint.
 - Zhipu AI automatic sync first tries the undocumented `GET https://open.bigmodel.cn/api/finance/balance` endpoint, then falls back to verifying the API key through `GET /models`. Official docs only expose cash balance in the web console.
+- OpenRouter stores two optional keys: the inference API key for vault access, and a management API key for balance sync. Sync reads account credits from `GET https://openrouter.ai/api/v1/credits` via the management key, and per-key limits/monthly usage from `GET https://openrouter.ai/api/v1/key` via the inference key.
 - Aliyun Bailian automatic sync verifies the saved model API key through the OpenAI-compatible models endpoint. If Aliyun AK/SK is saved, it also queries Alibaba Cloud BSS `QueryAccountBalance` for cash balance and `QueryAccountBill` for the current account bill.
 - Saved API keys can be revealed and copied from the provider detail view.
 - Custom macOS app icon generated into `Assets/AppIcon.icns` during packaging.

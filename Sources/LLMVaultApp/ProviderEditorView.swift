@@ -9,9 +9,11 @@ struct ProviderEditorView: View {
     @State private var apiKey = ""
     @State private var aliyunAccessKeyID = ""
     @State private var aliyunAccessKeySecret = ""
+    @State private var openRouterManagementAPIKey = ""
     @State private var isShowingStoredAPIKey = false
     @State private var isShowingStoredAliyunAccessKeyID = false
     @State private var isShowingStoredAliyunAccessKeySecret = false
+    @State private var isShowingStoredOpenRouterManagementAPIKey = false
 
     init(provider: ProviderAccount) {
         _provider = State(initialValue: provider)
@@ -22,6 +24,8 @@ struct ProviderEditorView: View {
         _aliyunAccessKeySecret = State(initialValue: provider.hasStoredAliyunAccessKeys ? StoredSecretPlaceholder.mask : "")
         _isShowingStoredAliyunAccessKeyID = State(initialValue: provider.hasStoredAliyunAccessKeys)
         _isShowingStoredAliyunAccessKeySecret = State(initialValue: provider.hasStoredAliyunAccessKeys)
+        _openRouterManagementAPIKey = State(initialValue: provider.hasStoredOpenRouterManagementKey ? StoredSecretPlaceholder.mask : "")
+        _isShowingStoredOpenRouterManagementAPIKey = State(initialValue: provider.hasStoredOpenRouterManagementKey)
     }
 
     var body: some View {
@@ -33,7 +37,7 @@ struct ProviderEditorView: View {
                 TextField("Name", text: $provider.name)
 
                 Picker("Provider", selection: $provider.kind) {
-                    ForEach(ProviderKind.allCases) { kind in
+                    ForEach(ProviderKind.allCasesSortedByDisplayName) { kind in
                         Text(kind.displayName).tag(kind)
                     }
                 }
@@ -49,17 +53,44 @@ struct ProviderEditorView: View {
                         .labelsHidden()
                 }
 
-                LabeledContent("API Key") {
+                LabeledContent(provider.kind == .openRouter ? "API Key (Vault)" : "API Key") {
                     SecureField("API Key", text: $apiKey, prompt: Text("Enter API key"))
                         .textFieldStyle(.roundedBorder)
                         .labelsHidden()
                         .id("\(provider.id)-api-key-\(isShowingStoredAPIKey)")
-                        .help("Leave the placeholder to keep the existing Keychain value.")
+                        .help(provider.kind == .openRouter
+                            ? "Store your inference API key for safekeeping. Leave the placeholder to keep the existing Keychain value."
+                            : "Leave the placeholder to keep the existing Keychain value.")
                         .onChange(of: apiKey) { _, newValue in
                             if isShowingStoredAPIKey && newValue != StoredSecretPlaceholder.mask {
                                 isShowingStoredAPIKey = false
                             }
                         }
+                }
+
+                if provider.kind == .openRouter {
+                    Section("OpenRouter Billing") {
+                        LabeledContent("Management API Key") {
+                            SecureField("Management API Key", text: $openRouterManagementAPIKey, prompt: Text("Enter management API key"))
+                                .textFieldStyle(.roundedBorder)
+                                .labelsHidden()
+                                .help("Leave the placeholder to keep the existing Keychain value.")
+                                .onChange(of: openRouterManagementAPIKey) { _, newValue in
+                                    if isShowingStoredOpenRouterManagementAPIKey && newValue != StoredSecretPlaceholder.mask {
+                                        isShowingStoredOpenRouterManagementAPIKey = false
+                                    }
+                                }
+                        }
+
+                        if store.hasOpenRouterManagementKey(for: provider) {
+                            Label("Management key saved in Keychain", systemImage: "checkmark.seal.fill")
+                                .foregroundStyle(.secondary)
+                        } else {
+                            Text("Add a management key to sync account credits. The inference API key alone can only read per-key limits and monthly usage.")
+                                .font(.callout)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
                 }
 
                 if provider.kind == .aliyun {
@@ -117,7 +148,8 @@ struct ProviderEditorView: View {
                         savedProvider,
                         apiKey: StoredSecretPlaceholder.valueForSave(apiKey),
                         aliyunAccessKeyID: StoredSecretPlaceholder.valueForSave(aliyunAccessKeyID),
-                        aliyunAccessKeySecret: StoredSecretPlaceholder.valueForSave(aliyunAccessKeySecret)
+                        aliyunAccessKeySecret: StoredSecretPlaceholder.valueForSave(aliyunAccessKeySecret),
+                        openRouterManagementAPIKey: StoredSecretPlaceholder.valueForSave(openRouterManagementAPIKey)
                     )
                     dismiss()
                 }
@@ -174,6 +206,16 @@ struct ProviderEditorView: View {
             aliyunAccessKeySecret = ""
             isShowingStoredAliyunAccessKeyID = false
             isShowingStoredAliyunAccessKeySecret = false
+        }
+
+        if store.hasOpenRouterManagementKey(for: current) {
+            isShowingStoredOpenRouterManagementAPIKey = true
+            if openRouterManagementAPIKey.isEmpty || StoredSecretPlaceholder.isPlaceholder(openRouterManagementAPIKey) {
+                openRouterManagementAPIKey = StoredSecretPlaceholder.mask
+            }
+        } else if isShowingStoredOpenRouterManagementAPIKey {
+            openRouterManagementAPIKey = ""
+            isShowingStoredOpenRouterManagementAPIKey = false
         }
     }
 }

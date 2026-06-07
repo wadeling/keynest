@@ -22,12 +22,14 @@ struct ProviderKeychainCredentials: Sendable {
     let apiKey: String
     let aliyunAccessKeyID: String?
     let aliyunAccessKeySecret: String?
+    let openRouterManagementAPIKey: String?
 }
 
 private struct ProviderSecrets: Codable, Hashable {
     var apiKey: String?
     var aliyunAccessKeyID: String?
     var aliyunAccessKeySecret: String?
+    var openRouterManagementAPIKey: String?
 }
 
 private struct VaultSecrets: Codable {
@@ -82,11 +84,16 @@ final class KeychainService {
         return secrets.aliyunAccessKeyID != nil && secrets.aliyunAccessKeySecret != nil
     }
 
+    func hasOpenRouterManagementKey(for provider: ProviderAccount) -> Bool {
+        providerSecrets(for: provider)?.openRouterManagementAPIKey != nil
+    }
+
     func saveProviderCredentials(
         for provider: ProviderAccount,
         apiKey: String? = nil,
         aliyunAccessKeyID: String? = nil,
-        aliyunAccessKeySecret: String? = nil
+        aliyunAccessKeySecret: String? = nil,
+        openRouterManagementAPIKey: String? = nil
     ) throws {
         var vault = vaultSecrets ?? VaultSecrets()
         var secrets = vault.providers[provider.id.uuidString, default: ProviderSecrets()]
@@ -100,6 +107,9 @@ final class KeychainService {
         if let aliyunAccessKeySecret {
             secrets.aliyunAccessKeySecret = aliyunAccessKeySecret
         }
+        if let openRouterManagementAPIKey {
+            secrets.openRouterManagementAPIKey = openRouterManagementAPIKey
+        }
 
         vault.providers[provider.id.uuidString] = secrets
         vaultSecrets = vault
@@ -107,16 +117,32 @@ final class KeychainService {
     }
 
     func readProviderCredentials(for provider: ProviderAccount) throws -> ProviderKeychainCredentials? {
-        guard let secrets = providerSecrets(for: provider),
-              let apiKey = secrets.apiKey
-        else {
+        guard let secrets = providerSecrets(for: provider) else {
+            return nil
+        }
+
+        if provider.kind == .openRouter {
+            guard secrets.apiKey != nil || secrets.openRouterManagementAPIKey != nil else {
+                return nil
+            }
+
+            return ProviderKeychainCredentials(
+                apiKey: secrets.apiKey ?? "",
+                aliyunAccessKeyID: secrets.aliyunAccessKeyID,
+                aliyunAccessKeySecret: secrets.aliyunAccessKeySecret,
+                openRouterManagementAPIKey: secrets.openRouterManagementAPIKey
+            )
+        }
+
+        guard let apiKey = secrets.apiKey else {
             return nil
         }
 
         return ProviderKeychainCredentials(
             apiKey: apiKey,
             aliyunAccessKeyID: secrets.aliyunAccessKeyID,
-            aliyunAccessKeySecret: secrets.aliyunAccessKeySecret
+            aliyunAccessKeySecret: secrets.aliyunAccessKeySecret,
+            openRouterManagementAPIKey: secrets.openRouterManagementAPIKey
         )
     }
 
